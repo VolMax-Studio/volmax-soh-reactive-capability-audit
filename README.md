@@ -1,50 +1,51 @@
-# SOH-Aware Reactive Power Capability Demo
-**Joint Collaboration: Electrisim (Adam Kierad) × VolMax Studio Lab (Ivan Nestorov)**
+# VolMax BESS Reactive Capability Audit (SOH-Aware Derating)
 
-This repository demonstrates how battery degradation—specifically State of Health (SOH) and internal resistance ($R_{\text{int}}$) rise—physically constrains a BESS inverter's capability to deliver reactive power ($Q$) under grid-code compliance events (such as Q-V droop or voltage support).
+An independent Proof of Concept (PoC) demonstrating how Battery State of Health (SOH) physically restricts the reactive power (MVAr) capability of Grid-Scale BESS, and how static grid compliance models produce false positives.
 
----
+## The Industry Blind Spot
+Most grid integration and load-flow studies treat Battery Energy Storage Systems (BESS) as static assets. If the inverter datasheet claims $\pm X$ MVAr, the grid compliance engine assumes the system can deliver $\pm X$ MVAr for its entire 15-year lifespan. 
 
-## 1. Integration with Electrisim / pandapower
+**This is a physical fallacy.** 
+As lithium-ion cells age, their internal resistance ($R_{int}$) increases and the Open Circuit Voltage (OCV) curve shifts. When providing maximum reactive power, the voltage sag/swell under high apparent current hits the inverter's DC-link voltage limits much earlier. The true reactive capability of a degraded battery is strictly bounded by its SOH.
 
-This prototype is designed to easily plug into the Electrisim/pandapower BESS model representation:
-- The `reactive_capability` function computes the shrunk `q_avail_mvar` based on the battery's instantaneous state.
-- In pandapower, this maps directly to the active limits of a static generator (`sgen`) or `storage` element:
-  - `sgen.max_q_mvar = q_avail_mvar`
-- You can run the existing Electrisim PQ module and grid-code compliance sweeps twice, swapping the SOH input to flip the compliance verdict at the Point of Connection (POC).
+## The VolMax Approach
+This repository contains the VolMax `soh_to_capability` mapping function. It bridges the gap between electrochemical degradation and grid-side load-flow engines.
 
----
+The function takes the battery state:
+- **SOH (State of Health)**
+- **R_int (Internal Resistance)**
+- **OCV (Open Circuit Voltage)**
 
-## 2. Verification Doctrine & Scope Boundaries
+And dynamically calculates the **derated Q headroom** (`q_avail_mvar`). 
 
-> [!IMPORTANT]
-> **Representative Inverter Parameters**
-> This repository is calibrated using representative specifications for a utility-scale BESS inverter class ($3.45\text{ MVA}$ apparent power rating, $550\text{ V}$ AC nominal line voltage). These parameters are illustrative and not tied to a specific verified manufacturer datasheet. Always replace the specifications in `soh_capability.py` with your specific project's inverter and aged battery datasheet values before drawing binding compliance conclusions.
+### The "Verdict Flip"
+By running this model, we expose the discrepancy between *paper capability* and *physical capability*. A BESS that passes a Point of Common Coupling (PCC) voltage-droop compliance check at 95% SOH (inflated by leakage-optimistic models) can **fail** the exact same check at 80% SOH (honest aged state) because it no longer has the physical voltage headroom to push the required reactive current. This is demonstrated in the included `reproduce.py` example, where the compliance verdict flips at 2.8 MW active export under a 1.5 Mvar reactive support requirement.
 
-> [!WARNING]
-> **Out of Scope**
-> This is a simplified, instantaneous single-stage electrical capability model. It is designed to capture the core modulation constraint ($R_{\text{int}} \to V_{\text{dc}} \to V_{\text{ac,max}} \to Q_{\text{avail}}$) on a seconds/minutes timescale. It does **not** model:
-> - SOC energy depletion over time (multi-hour load flows).
-> - Thermal derating of battery cells or inverter power electronics.
-> - High-frequency inverter control-loop dynamics and transients.
-> - Harmonic voltage/current limits at the POC.
+## Integration (Pandapower)
+This function is designed to be engine-agnostic but drops perfectly into open-source load-flow engines like `pandapower`.
 
----
+Instead of using a static generator capability, map the VolMax output dynamically before running your power flow:
+```python
+# Standard static assumption (Flawed)
+net.sgen.max_q_mvar = nameplate_q_mvar
 
-## 3. How the Demo Flips
-
-The compliance verdict flips under identical grid conditions depending solely on the integrity of the SOH input:
-
-* At $P = 2.8\text{ MW}$ with a grid-code reactive requirement of $Q_{\text{req}} = 1.5\text{ Mvar}$ at the POC:
-  - **Leakage-Inflated SOH** ($R_{\text{int}} = 0.025\,\Omega$, $95\%$ SOH): The inverter reports $1.61\text{ Mvar}$ is available. **Verdict: PASS (on paper).**
-  - **Honest SOH (Aged Battery)** ($R_{\text{int}} = 0.045\,\Omega$, $80\%$ SOH): Due to the high $R_{\text{int}}$, the available DC voltage drops to $965.5\text{ V}$, limiting the AC modulation ceiling and shrinking the headroom to $1.15\text{ Mvar}$. **Verdict: FAIL (in the field).**
-
----
-
-## 4. How to Run the Demo
-
-Run the python capability sweep script:
-```bash
-python3 soh_capability.py
+# VolMax SOH-aware dynamic mapping (SOH-aware model)
+q_avail_mvar = calculate_derated_q(soh, r_int, v_dc_link, nameplate_q_mvar)
+net.sgen.max_q_mvar = q_avail_mvar
 ```
-This will print the operating points sweep and output a detailed JSON breakdown of the operating point where the compliance verdict flips.
+
+## Limitations
+This Proof of Concept is a simplified physical model with the following boundaries:
+1. **R_int to SOH Mapping**: The internal resistance scaling is a model assumption. Real-world cells exhibit significant physical variation (e.g., up to 1.9× resistance scatter at end-of-life), meaning SOH does not map deterministically to a single resistance value.
+2. **Simplified DC-Link Dynamics**: The inverter DC-link voltage drop is simplified. Real utility-scale inverters employ complex internal control-loop strategies and active voltage management.
+3. **Low-Frequency Resistance**: The model assumes a static low-frequency resistance ($R_{int}$), neglecting dynamic impedance responses under high-frequency grid transients.
+
+## License
+
+This code is released under the **Apache 2.0 License**. It is open for integration into broader power system analysis tools, provided the VolMax verification logic remains attributed.
+
+---
+
+*Developed by Ivan Nestorov | [VolMax Studio Lab](https://volmax-studio.rs) - Independent AI & Operations Verification for Battery Systems.*
+
+*Concept emerged from a public exchange on Adam Kierad's Q-V droop post; all code, physics, and implementation are the author's own.*

@@ -22,6 +22,7 @@ PHYSICS (instantaneous / grid-stability timescale, NOT energy-depletion):
 """
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field, asdict
 from math import sqrt
 
@@ -42,6 +43,7 @@ class BatteryState:
     r_int_ohm: float                   # present internal resistance (rises with age)
     ocv_v: float                       # open-circuit DC voltage at current SOC
     label: str = ""                    # "honest" / "leakage_inflated" / etc.
+    r_int_scatter: float = 0.15        # 15% uncertainty scatter of internal resistance
 
 
 def reactive_capability(
@@ -53,48 +55,69 @@ def reactive_capability(
 ) -> dict:
     """Return the deliverable Q headroom (Mvar) and the shrunk apparent-power
     limit for the given operating point, under the battery's present state.
+    Includes uncertainty bounds based on r_int_scatter.
     """
     p_w = p_mw * 1e6
     if i_dc_a is None:
         # estimate of DC current from active power and nominal link voltage
         i_dc_a = p_w / max(inv.v_dc_nominal_v, 1e-6)
-    
-    v_dc = batt.ocv_v - i_dc_a * batt.r_int_ohm
-    if v_dc <= 0:
+
+    def _calc_q_for_r_int(r):
+        v_dc = batt.ocv_v - i_dc_a * r
+        if v_dc <= 0:
+            return 0.0, 0.0, v_dc, 0.0
+        # AC voltage ceiling set by modulation against the real V_dc
+        v_ac_max = inv.m_max * v_dc / 2.0
+        v_dc_ceiling_healthy = inv.m_max * inv.v_dc_nominal_v / 2.0
+        modulation_headroom = min(1.0, v_ac_max / v_dc_ceiling_healthy)
+
+        # Apparent-power limit: min(nameplate, current-limit, modulation)
+        s_current_limit = sqrt(3) * inv.v_ac_nominal_v * inv.i_inv_max_a / 1e6   # MVA
+        s_avail = min(inv.s_rated_mva, s_current_limit) * modulation_headroom
+
+        # Reactive headroom at this P
+        q_sq = s_avail**2 - p_mw**2
+        q_avail = sqrt(q_sq) if q_sq > 0 else 0.0
+
+        # physics gate
+        if q_avail > 0:
+            s_check = sqrt(p_mw**2 + q_avail**2)
+            assert abs(s_check - s_avail) < 1e-6, (
+                f"apparent-power identity violated: {s_check} != {s_avail}"
+            )
+        return q_avail, s_avail, v_dc, modulation_headroom
+
+    # Propagate uncertainty bounds:
+    # r_int_max represents worst case (lowest Q); r_int_min represents best case (highest Q)
+    r_nom = batt.r_int_ohm
+    r_max = r_nom * (1.0 + batt.r_int_scatter)
+    r_min = r_nom * (1.0 - batt.r_int_scatter)
+
+    q_nom, s_nom, v_dc_nom, mod_nom = _calc_q_for_r_int(r_nom)
+    q_min, s_min, v_dc_min, _ = _calc_q_for_r_int(r_max)
+    q_max, s_max, v_dc_max, _ = _calc_q_for_r_int(r_min)
+
+    if v_dc_nom <= 0:
         return {
-            "label": batt.label, "p_mw": p_mw, "v_dc_v": round(v_dc, 1),
+            "label": batt.label, "p_mw": p_mw, "v_dc_v": round(v_dc_nom, 1),
             "q_avail_mvar": 0.0, "s_avail_mva": 0.0,
             "note": "V_dc collapsed under load (R_int too high for this current)",
         }
 
-    # AC voltage ceiling set by modulation against the real V_dc
-    v_ac_max = inv.m_max * v_dc / 2.0
-    v_dc_ceiling_healthy = inv.m_max * inv.v_dc_nominal_v / 2.0
-    modulation_headroom = min(1.0, v_ac_max / v_dc_ceiling_healthy)
-
-    # Apparent-power limit: min(nameplate, current-limit, modulation)
-    s_current_limit = sqrt(3) * inv.v_ac_nominal_v * inv.i_inv_max_a / 1e6   # MVA
-    s_avail = min(inv.s_rated_mva, s_current_limit) * modulation_headroom
-
-    # Reactive headroom at this P
-    q_sq = s_avail**2 - p_mw**2
-    q_avail = sqrt(q_sq) if q_sq > 0 else 0.0
-
-    # physics gate
-    if q_avail > 0:
-        s_check = sqrt(p_mw**2 + q_avail**2)
-        assert abs(s_check - s_avail) < 1e-6, (
-            f"apparent-power identity violated: {s_check} != {s_avail}"
-        )
-
     return {
         "label": batt.label,
         "p_mw": round(p_mw, 4),
-        "v_dc_v": round(v_dc, 1),
-        "modulation_headroom": round(modulation_headroom, 4),
-        "s_avail_mva": round(s_avail, 4),
-        "q_avail_mvar": round(q_avail, 4),
-        "p_over_s_limited": p_mw >= s_avail,
+        "v_dc_v": round(v_dc_nom, 1),
+        "v_dc_min_v": round(v_dc_min, 1),
+        "v_dc_max_v": round(v_dc_max, 1),
+        "modulation_headroom": round(mod_nom, 4),
+        "s_avail_mva": round(s_nom, 4),
+        "s_avail_min_mva": round(s_min, 4),
+        "s_avail_max_mva": round(s_max, 4),
+        "q_avail_mvar": round(q_nom, 4),
+        "q_avail_mvar_min": round(q_min, 4),
+        "q_avail_mvar_max": round(q_max, 4),
+        "p_over_s_limited": p_mw >= s_nom,
     }
 
 
@@ -142,35 +165,91 @@ def compare_honest_vs_inflated(
 
 
 if __name__ == "__main__":
+    import argparse
     import json
 
-    # Representative 3.45 MVA BESS inverter specs at 550 V AC L-L.
-    # (Illustrative values for this inverter class)
-    inv = InverterSpec(
-        s_rated_mva=3.45, v_dc_nominal_v=1100.0,
-        i_inv_max_a=3621.0, v_ac_nominal_v=550.0, m_max=1.0,
+    parser = argparse.ArgumentParser(
+        description="Calculate SOH-aware reactive power (Mvar) capability for BESS inverters."
     )
-    
-    # Representative physical cell degradations.
-    # Honest: SOH 80%, internal resistance raised to 45 mOhm.
-    # Inflated: SOH 95%, internal resistance reported as 25 mOhm.
-    honest = BatteryState(soh_fraction=0.80, r_int_ohm=0.045,
-                          ocv_v=1080.0, label="honest")
-    inflated = BatteryState(soh_fraction=0.95, r_int_ohm=0.025,
-                            ocv_v=1095.0, label="leakage_inflated")
+    parser.add_argument(
+        "--demo", action="store_true",
+        help="Run the comparison sweep demo comparing honest vs. inflated SOH"
+    )
+    parser.add_argument(
+        "--p-mw", type=float, default=2.8,
+        help="Active power dispatch level (MW)"
+    )
+    parser.add_argument(
+        "--soh", type=float, default=0.80,
+        help="Battery State of Health fraction (0.0 to 1.0)"
+    )
+    parser.add_argument(
+        "--r-int", type=float, default=0.045,
+        help="Battery internal resistance (Ohm)"
+    )
+    parser.add_argument(
+        "--ocv", type=float, default=1080.0,
+        help="Battery open-circuit voltage under load (V)"
+    )
+    parser.add_argument(
+        "--s-rated", type=float, default=3.45,
+        help="Inverter rated apparent power (MVA)"
+    )
+    parser.add_argument(
+        "--v-dc-nominal", type=float, default=1100.0,
+        help="Inverter nominal DC-link voltage (V)"
+    )
+    parser.add_argument(
+        "--i-inv-max", type=float, default=3621.0,
+        help="Inverter maximum AC current limit (A)"
+    )
+    parser.add_argument(
+        "--v-ac-nominal", type=float, default=550.0,
+        help="Inverter nominal AC line-to-line voltage (V)"
+    )
+    parser.add_argument(
+        "--m-max", type=float, default=1.0,
+        help="Inverter modulation index ceiling"
+    )
 
-    print("  [note] Calibrated with representative utility-scale inverter specifications.\n")
+    args = parser.parse_args()
 
-    # sweep P, find where the compliance verdict flips
-    print("  P(MW)  Q_req   Q_honest  Q_inflated  flips?")
-    for p in [1.0, 2.0, 2.5, 2.8, 3.0]:
-        r = compare_honest_vs_inflated(p, q_required_mvar=1.5,
-                                       honest=honest, inflated=inflated, inv=inv)
-        print(f"  {p:>4}   1.5    "
-              f"{r['honest_soh']['q_avail_mvar']:>7}   "
-              f"{r['inflated_soh']['q_avail_mvar']:>8}    "
-              f"{'YES' if r['verdict_flips'] else 'no'}")
+    # If no arguments provided or explicitly requesting --demo, run the sweep demo
+    if args.demo or len(sys.argv) == 1:
+        inv = InverterSpec(
+            s_rated_mva=3.45, v_dc_nominal_v=1100.0,
+            i_inv_max_a=3621.0, v_ac_nominal_v=550.0, m_max=1.0,
+        )
+        honest = BatteryState(soh_fraction=0.80, r_int_ohm=0.045,
+                              ocv_v=1080.0, label="honest")
+        inflated = BatteryState(soh_fraction=0.95, r_int_ohm=0.025,
+                                ocv_v=1095.0, label="leakage_inflated")
 
-    print()
-    detail = compare_honest_vs_inflated(2.8, 1.5, honest, inflated, inv)
-    print(json.dumps(detail, indent=2))
+        print("  [note] Calibrated with representative utility-scale inverter specifications.\n")
+        print("  P(MW)  Q_req   Q_honest (min/max)       Q_inflated (min/max)     flips?")
+        for p in [1.0, 2.0, 2.5, 2.8, 3.0]:
+            r = compare_honest_vs_inflated(p, q_required_mvar=1.5,
+                                           honest=honest, inflated=inflated, inv=inv)
+            q_h = f"{r['honest_soh']['q_avail_mvar']:.3f} ({r['honest_soh']['q_avail_mvar_min']:.3f}/{r['honest_soh']['q_avail_mvar_max']:.3f})"
+            q_i = f"{r['inflated_soh']['q_avail_mvar']:.3f} ({r['inflated_soh']['q_avail_mvar_min']:.3f}/{r['inflated_soh']['q_avail_mvar_max']:.3f})"
+            print(f"  {p:>4.1f}   1.5    {q_h:<24} {q_i:<24} {'YES' if r['verdict_flips'] else 'no'}")
+
+        print()
+        detail = compare_honest_vs_inflated(2.8, 1.5, honest, inflated, inv)
+        print(json.dumps(detail, indent=2))
+    else:
+        inv = InverterSpec(
+            s_rated_mva=args.s_rated,
+            v_dc_nominal_v=args.v_dc_nominal,
+            i_inv_max_a=args.i_inv_max,
+            v_ac_nominal_v=args.v_ac_nominal,
+            m_max=args.m_max,
+        )
+        batt = BatteryState(
+            soh_fraction=args.soh,
+            r_int_ohm=args.r_int,
+            ocv_v=args.ocv,
+            label="custom"
+        )
+        res = reactive_capability(args.p_mw, batt, inv)
+        print(json.dumps(res, indent=2))

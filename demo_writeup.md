@@ -1,10 +1,10 @@
 # Technical Write-up: Bridging Battery SOH and Grid Stability
-**Prepared by Ivan Nestorov (VolMax Studio Lab) for the Electrisim Joint Demo**
+**Prepared by Ivan Nestorov (VolMax Studio Lab) — Independent Proof of Concept (Concept emerged from a public exchange on Adam Kierad's Q-V droop post; all code, physics, and implementation are the author's own)**
 
 ## The Engineering Problem: The Disconnect Between Battery and Grid Models
 
 In utility-scale Battery Energy Storage Systems (BESS), grid compliance studies and battery health diagnostics are usually treated as separate domains:
-1. **Grid Engineers** run load-flow simulations (e.g., using OpenDSS, pandapower, or Electrisim) to verify that a BESS plant can meet reactive power requirements ($Q$) at the Point of Connection (POC) during grid events like voltage dips or active droop control. They treat the battery as an ideal, static DC voltage source.
+1. **Grid Engineers** run load-flow simulations (e.g., using OpenDSS, pandapower, or other power flow engines) to verify that a BESS plant can meet reactive power requirements ($Q$) at the Point of Connection (POC) during grid events like voltage dips or active droop control. They treat the battery as an ideal, static DC voltage source.
 2. **Battery ML Engineers** build data-driven models to predict State of Health (SOH) and internal resistance ($R_{\text{int}}$). These models are often validated in isolation using cycle-level splits that suffer from validation leakage, reporting inflated accuracies.
 
 When these two domains meet in the field, the system fails. A BESS plant that passed compliance on paper fails to stabilize the grid when its batteries are actually degraded.
@@ -62,4 +62,4 @@ The grid study was approved on paper, but in the field, the BESS cannot deliver 
 
 ## Conclusion & Integration Path
 
-By incorporating this `SOH-aware` degradation layer directly into the load-flow capability checks (such as Electrisim's PQ module), developers and asset managers can transition from optimistic "static nameplate" grid studies to honest, degradation-aware compliance checks.
+By incorporating this SOH-aware degradation layer directly into load-flow capability checks (such as those in `pandapower` or custom power system models), developers and asset managers can transition from optimistic, static "nameplate" grid studies to honest, degradation-aware compliance verification.

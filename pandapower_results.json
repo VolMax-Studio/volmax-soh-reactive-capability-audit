@@ -1,0 +1,20 @@
+{
+  "requested_p_mw": 2.8,
+  "requested_q_mvar": 1.5,
+  "inflated_scenario": {
+    "delivered_q_mvar": 1.5,
+    "q_shortfall_mvar": 0.0,
+    "bus_voltage_pu": 1.03144
+  },
+  "honest_nominal_scenario": {
+    "delivered_q_mvar": 1.1515,
+    "q_shortfall_mvar": 0.3485,
+    "bus_voltage_pu": 1.02582
+  },
+  "honest_worst_scenario": {
+    "delivered_q_mvar": 1.0013,
+    "q_shortfall_mvar": 0.4987,
+    "bus_voltage_pu": 1.02338
+  },
+  "verdict_flip": true
+}
