@@ -1,0 +1,27 @@
+{
+  "baseline_commit": "337b43e7b699916b953272ed383d492c6a5e38ee",
+  "baseline_tree": "bdcbb1154dc04bb9123c9aa1c41163998d65098f",
+  "behavior": {
+    "callbacks": false,
+    "executable": false,
+    "network_calls": false,
+    "telemetry": false
+  },
+  "canonical_url": "https://github.com/VolMax-Studio/volmax-soh-reactive-capability-audit",
+  "default_branch_at_recording": "main",
+  "license": {
+    "detected_spdx": "Apache-2.0",
+    "files": [
+      "LICENSE"
+    ],
+    "note": "This provenance record does not grant or alter license rights."
+  },
+  "owner": "VolMax-Studio",
+  "record_id": "urn:volmax:github:VolMax-Studio/volmax-soh-reactive-capability-audit:337b43e7b699916b953272ed383d492c6a5e38ee",
+  "record_type": "volmax.repository-provenance",
+  "record_version": 1,
+  "recorded_at": "2026-10-08T19:28:46+00:00",
+  "repository": "VolMax-Studio/volmax-soh-reactive-capability-audit",
+  "schema": "urn:volmax:provenance:v1",
+  "scope": "Repository identity and baseline commit only; historical tags, releases, evidence, authorship, and existing file bytes are unchanged."
+}
